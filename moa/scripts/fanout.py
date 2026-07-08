@@ -10,6 +10,8 @@ _MAX_WORKERS = 8
 
 def call_one(ref, prompt, mode, cwd, max_tokens):
     label = f"{ref['backend']}:{ref['model']}"
+    if ref.get("isolate") == "docker" and mode == "hard" and ref["backend"] == "openrouter":
+        label += " (docker)"
     if not eligible(ref["backend"], mode):
         return RefResult(label, f"[skipped: {ref['backend']}는 hard 전용]", False)
     try:

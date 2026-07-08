@@ -21,19 +21,37 @@ Combining several models' perspectives on a hard problem beats any single model 
 | --- | --- | --- |
 | Reference nature | advice from prompt text only | independent session with read-only tools |
 | Code access | ❌ prompt context only | ✅ real repo exploration (read-only) |
-| Backends run | `openrouter` only | `codex` · `claude` + `openrouter` (advisory) |
+| Backends run | `openrouter` only | `codex` · `claude` (subscription) + `openrouter` (advisory, or Docker-isolated) |
 | Use for | ideas, design, judgment | actual codebase analysis / review |
 
-References cannot cause side effects in **any** mode: `codex` is spawned with `-s read-only`, `claude` with `--permission-mode plan`, and child processes receive a minimal environment (no inherited API keys). Only the aggregator — your session — holds full permissions.
+References cannot cause side effects in **any** mode: `codex` is spawned with `-s read-only`, `claude` with `--permission-mode plan`, an `openrouter` docker reference runs inside a kernel-enforced read-only container, and every child process receives a minimal environment (no inherited API keys). Only the aggregator — your session — holds full permissions.
+
+### Hybrid backends — billing decides the path
+
+The three backends differ in how they're billed, and that determines how they run:
+
+- **`codex` / `claude` — subscription (OAuth).** Run via their native CLIs on the host, using your ChatGPT / Claude subscription. Flat-rate, so no reason to route them elsewhere.
+- **`openrouter` — metered (per token).** In `soft` mode it advises from prompt text. In `hard` mode it's advisory by default, but a reference marked `isolate: docker` is promoted to a real code-reading agent inside an **on-demand Docker container** — the repo is mounted `:ro`, the root filesystem is `--read-only`, so writes are refused by the kernel, not merely by a flag. Since it's metered anyway, isolation is maxed out. This works for any of OpenRouter's models (Claude, GPT, Gemini, DeepSeek, …) via one key.
 
 ## Requirements
 
 - **Python 3** with **PyYAML** (`pip install pyyaml`) — the only dependency.
-- **OpenRouter API key** for soft mode: `OPENROUTER_API_KEY` (env var, preferred) or `~/.claude/auth/ai-ml-services.env`.
+- **OpenRouter API key**: `OPENROUTER_API_KEY` (env var, preferred) or `~/.claude/auth/ai-ml-services.env`.
+- **Docker** (optional, for `isolate: docker` references): the `moa-agent` image is built lazily from the shipped Dockerfile on first use.
 - **Codex CLI** (optional, hard mode): [openai/codex](https://github.com/openai/codex), logged in.
 - **Claude Code CLI** (optional, hard mode): logged in.
 
 Missing backends are isolated as `[failed: ...]` — the rest of the fan-out still runs.
+
+## First-run setup
+
+`moa setup` detects which backends are available and writes a recommended config. It **never asks for an API key** — it only checks presence and guides you to set missing ones yourself, in a separate terminal:
+
+```bash
+python3 ~/.claude/skills/moa/scripts/moa.py setup
+```
+
+Never paste an API key into the Claude session — it would land in the transcript. Set `OPENROUTER_API_KEY` in your shell profile (or the auth file); log into `codex` / Claude Code for the subscription backends.
 
 ## Install
 
@@ -89,11 +107,11 @@ presets:
       - { backend: openrouter, model: openai/gpt-5.5 }
     reference_max_tokens: null # null = unlimited, or an int to cap reference length
     enabled: true
-  review:                      # hard code review — 3 read-only sessions
+  review:                      # hard code review — subscription sessions + Docker-isolated openrouter
     references:
-      - { backend: claude, model: claude-opus-4-8 }
-      - { backend: codex, model: gpt-5.5 }
-      - { backend: openrouter, model: z-ai/glm-5.2 }
+      - { backend: claude, model: claude-opus-4-8 }                   # subscription (OAuth)
+      - { backend: codex, model: gpt-5.5 }                            # subscription (OAuth)
+      - { backend: openrouter, model: z-ai/glm-5.2, isolate: docker } # metered; kernel-isolated, reads code
     reference_max_tokens: 2000
     enabled: true
 ```
@@ -102,24 +120,28 @@ presets:
 | --- | --- |
 | `backend` | one of `openrouter` / `codex` / `claude`; anything else (including a recursive `moa`) is dropped |
 | `model` | non-empty string; backend-specific model id |
+| `isolate` | `docker` promotes an `openrouter` hard reference to a kernel-isolated code-reading agent; honored only for `openrouter` (else `none`) |
 | `reference_max_tokens` | positive int, else `null` (unlimited); applies to advisors |
 | `enabled` | `false` skips the fan-out and lets the aggregator act alone |
 
 Notes:
 
 - In soft mode only `openrouter` references run; `codex`/`claude` show as `[skipped: hard only]`.
+- `isolate: docker` needs Docker running; the `moa-agent` image builds on first use. A docker-isolated reference shows as `openrouter:model (docker)` in the output so you can tell code-reading refs from advisory ones.
 - Up to 8 references run in parallel; one failure is isolated as `[failed: <reason>]` and the rest continue.
 - For reasoning-heavy models (deepseek, glm, …) set `reference_max_tokens` to 2000+ — too low and the budget is spent on reasoning, yielding empty content.
 - A malformed YAML file falls back to the default preset (with a warning).
 
 ## Design notes
 
-Four small modules, one responsibility each:
+Small modules, one responsibility each:
 
 - `config.py` — registry load + normalization (pure functions)
-- `adapters.py` — one reference call per backend; read-only enforcement; error/secret sanitization
+- `adapters.py` — one reference call per backend; read-only enforcement; error/secret sanitization; Docker isolation
 - `fanout.py` — parallel orchestration, mode gating, failure isolation, output formatting
-- `moa.py` — CLI entry (argument parsing, mode wiring, synthesis hint)
+- `setup.py` — provider detection + config recommendation (never collects key values)
+- `moa.py` — CLI entry (argument parsing, `setup` subcommand, mode wiring, synthesis hint)
+- `docker/` — the `moa-agent` read-only reference container (stdlib tool loop, path-confined)
 
 Synthesis is not ported — the returned block is meant to be reconciled by the calling session.
 
@@ -128,10 +150,12 @@ Synthesis is not ported — the returned block is meant to be reconciled by the 
 References run untrusted models, so the skill enforces a read-only invariant and limits what leaves the machine:
 
 - **No side effects.** `codex` runs under `-s read-only`; `claude` under `--permission-mode plan` with `--allowedTools Read Grep Glob`. The actual write-block comes from plan mode, not the allowlist — do not remove it.
-- **Minimal child environment.** Subprocesses receive only a whitelist (`PATH`, `HOME`, `USER`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`, `TERM`) so parent API keys are never inherited. `stdin` is closed to prevent CLIs from hanging on an inherited pipe.
+- **Kernel-enforced isolation for `isolate: docker`.** The container mounts the repo `:ro`, runs `--read-only` with a `--tmpfs /tmp`, non-root, memory/pid capped. Writes are refused by the kernel, not by an app flag. The in-container agent has only read/list/grep tools (no write/exec) and confines every file access — including through symlinks — to the mounted repo. On a host timeout the container is `docker kill`ed so a metered API call can't run unsupervised.
+- **Keys are never collected.** `moa setup` only detects credential *presence* (a boolean) — it never reads, prints, stores, or transmits a key value. In `run_docker` the key is passed to the container via env (`-e OPENROUTER_API_KEY`, name only), never on the command line.
+- **Minimal child environment.** Every child process (CLI or container build/run) receives only a whitelist (`PATH`, `HOME`, `USER`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`, `TERM`) so parent API keys are never inherited. `stdin` is closed to prevent CLIs from hanging on an inherited pipe.
 - **Secret masking.** Error text surfaced to the user (`[failed: ...]`) is run through a sanitizer that masks `Bearer` tokens, `sk-` keys, and `*_API_KEY=` / `*_TOKEN=` / `*_SECRET=` patterns.
 
-Known limit, stated honestly: write-blocking for `codex`/`claude` is delegated to the child CLI's flags — there is no in-process sandbox or post-run verification. `soft`-mode `openrouter` calls send the prompt text as-is to an external API, so avoid putting secrets in the prompt.
+Known limits, stated honestly: write-blocking for `codex`/`claude` is delegated to the child CLI's flags — there is no in-process sandbox or post-run verification (the Docker path *is* kernel-enforced). Any reference sends prompt text — and, for docker/CLI refs, the code it reads — to a remote model, so `:ro` stops writes but not network egress; avoid putting secrets in the prompt.
 
 ## Attribution
 

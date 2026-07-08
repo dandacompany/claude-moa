@@ -1,18 +1,29 @@
 # MoA 레지스트리 — ~/.claude/moa/config.yml 로 복사되어 쓰임.
-# soft 는 openrouter 참조만 실행됨. codex/claude 는 hard 전용.
+# `moa setup` 으로 가용 백엔드를 감지해 이 파일을 자동 구성할 수 있다.
+#
+# ── 키 설정 (별도 터미널에서, 세션에 붙여넣지 말 것) ──────────────
+#   openrouter: export OPENROUTER_API_KEY=sk-or-...  (shell 프로파일)
+#               또는 ~/.claude/auth/ai-ml-services.env 에 OPENROUTER_API_KEY=... 추가
+#   codex:      ChatGPT 구독 있으면 `codex login`
+#   claude:     Claude 구독 있으면 Claude Code 로그인
+#
+# ── 하이브리드 (과금이 경로를 가른다) ────────────────────────────
+#   soft = openrouter 참조만(조언, 종량). codex/claude 는 hard 전용.
+#   hard: codex/claude = 구독 OAuth 네이티브 세션. openrouter = advisory 강등,
+#         단 `isolate: docker` 를 주면 Docker 커널 격리로 코드 읽는 에이전트 격상.
 # 백엔드별 기본 모델: openrouter=z-ai/glm-5.2, codex=gpt-5.5, claude=claude-opus-4-8
 default_preset: default
 presets:
-  default: # soft 기본 — openrouter 조언
+  default: # soft 기본 — openrouter 조언(종량)
     references:
       - { backend: openrouter, model: z-ai/glm-5.2 }
       - { backend: openrouter, model: openai/gpt-5.5 }
     reference_max_tokens: null
     enabled: true
-  review: # hard 코드검토용 — 읽기전용 세션 3종
+  review: # hard 코드검토 — 구독 세션 + openrouter Docker 격리
     references:
-      - { backend: claude, model: claude-opus-4-8 }
-      - { backend: codex, model: gpt-5.5 }
-      - { backend: openrouter, model: z-ai/glm-5.2 }
+      - { backend: claude, model: claude-opus-4-8 } # 구독(OAuth)
+      - { backend: codex, model: gpt-5.5 } # 구독(OAuth)
+      - { backend: openrouter, model: z-ai/glm-5.2, isolate: docker } # 종량, 커널 격리로 코드 읽음
     reference_max_tokens: 2000
     enabled: true

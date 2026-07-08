@@ -29,7 +29,9 @@ def clean_ref(raw):
     model = str(raw.get("model", "")).strip()
     if backend not in VALID_BACKENDS or not model:
         return None
-    return {"backend": backend, "model": model}
+    iso = str(raw.get("isolate", "none")).strip().lower()
+    isolate = "docker" if (iso == "docker" and backend == "openrouter") else "none"
+    return {"backend": backend, "model": model, "isolate": isolate}
 
 
 def _coerce_int_or_none(v):

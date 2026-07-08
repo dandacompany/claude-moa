@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+import time
+
+import yaml
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from scripts import config as config_module
+from scripts import setup as setup_module
 from scripts.config import load_config, resolve_preset
 from scripts.fanout import run_fanout
 
@@ -31,8 +37,46 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
+def _parse_setup_args(argv):
+    p = argparse.ArgumentParser(prog="moa setup", description="MoA 온보딩 설정")
+    p.add_argument("--config", default=None, help="config.yml 경로 오버라이드")
+    return p.parse_args(argv)
+
+
+def run_setup(argv):
+    ns = _parse_setup_args(argv)
+    path = ns.config or config_module.CONFIG_PATH
+
+    detected = setup_module.detect()
+    sys.stdout.write(setup_module.render_report(detected) + "\n")
+
+    cfg = setup_module.recommend_config(detected)
+
+    if os.path.exists(path):
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        backup_path = f"{path}.bak-{ts}"
+        shutil.copyfile(path, backup_path)
+        sys.stdout.write(f"기존 설정을 {backup_path}로 백업했습니다.\n")
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(cfg, fh, allow_unicode=True, sort_keys=False)
+
+    sys.stdout.write(
+        f"설정을 {path}에 기록했습니다. 변경: /moa setup 재실행 또는 파일 편집.\n"
+    )
+    return 0
+
+
 def main(argv=None):
-    ns = parse_args(argv if argv is not None else sys.argv[1:])
+    argv = argv if argv is not None else sys.argv[1:]
+    if argv and argv[0] == "setup":
+        return run_setup(argv[1:])
+
+    ns = parse_args(argv)
     prompt = " ".join(ns.prompt)
     mode = "hard" if ns.hard else "soft"
     cfg = load_config(ns.config)
