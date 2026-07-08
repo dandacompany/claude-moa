@@ -3,6 +3,7 @@
 **Claude Code용 Mixture of Agents 스킬 — 여러 모델에 질문을 병렬로 팬아웃하고, 현재 세션이 그 관점들을 종합한다.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![skills.sh](https://img.shields.io/badge/skills.sh-claude--moa-blue)](https://skills.sh/dandacompany/claude-moa)
 
 English: [README.md](./README.md)
 

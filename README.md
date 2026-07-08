@@ -3,6 +3,7 @@
 **A Mixture of Agents skill for Claude Code — fan out a question to several models in parallel, then let your current session synthesize their perspectives.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![skills.sh](https://img.shields.io/badge/skills.sh-claude--moa-blue)](https://skills.sh/dandacompany/claude-moa)
 
 한국어 문서: [README.ko.md](./README.ko.md)
 
